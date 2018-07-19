@@ -39,7 +39,7 @@ def get_offset(cigar, pos):
         elif op == I:
             offset += n
         else:
-            print('CIGAR operation not supported', op)
+            print('CIGAR operation not supported', op, file=sys.stderr)
         if ref_pos >= pos:
             break
     return offset
@@ -65,7 +65,7 @@ def run(bam, bed, output, margin=0, log=None, refout=False, minlen=1):
             elif strand == '-':
                 reverse = True
             else:
-                print('Invalid strand specification: ', strand)
+                print('Invalid strand specification: ', strand, file=sys.stderr)
                 exit()
 
             writer = Writer(minlen, margin)
@@ -123,7 +123,7 @@ if __name__ == '__main__':
     p.add_argument('bam', help='')
     p.add_argument('bed', type=argparse.FileType(), help='')
     p.add_argument('-o', '--output', type=argparse.FileType('w'), default='-')
-    p.add_argument('-l', '--log', type=argparse.FileType('w'), default='-')
+    p.add_argument('--log', type=argparse.FileType('w'), default=sys.stderr)
     p.add_argument('-r', '--refout', action='store_true',
         help="Output the trimmed reference sequence. CAUTION: Seems not to work \
         correctly at present. Requires the MD tag to be set."
