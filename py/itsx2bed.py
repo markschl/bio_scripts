@@ -13,10 +13,12 @@ the domains.
 p.add_argument("prefix")
 p.add_argument("-d", "--domains", default='SSU,ITS1,5.8S,ITS2,LSU')
 p.add_argument("--minlen", type=int, default=4, help='minimum length of sequence')
+p.add_argument("-e", "--exclude", action='append', help='Exclude if given string is found in comment of positions file.')
 args = p.parse_args()
 
 domain_p = re.compile(r'([^:]+): (.+)')
 len_p = re.compile(r'(\d+) bp\.')
+exclude = set(args.exclude)
 
 minlen = args.minlen
 prefix = args.prefix
@@ -44,7 +46,8 @@ else:
 
 with open(posfile) as f:
     for line in csv.reader(f, delimiter='\t'):
-        if line and not any(e in line[7] for e in errors):
+        comment = line[7]
+        if line and not any(e in comment for e in errors) and not any(e in comment for e in exclude):
             length = int(len_p.search(line[1]).group(1))
             id = line[0]
             pos = 1
@@ -77,7 +80,7 @@ with open(posfile) as f:
 
                     n += 1
                     pos = start
-                    
+
                     if end - start >= minlen:
                         if complementary is None:
                             outfiles[name].writerow([id, start - 1, end])
