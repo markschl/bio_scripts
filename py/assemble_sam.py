@@ -10,13 +10,12 @@ import multiprocessing
 
 import pysam
 
-from lib import FastaIO, seq
+from lib import FastaIO
 from lib.seq import SeqRecord
 from lib.alignment import consensus
 
 
 MAFFT = 'mafft'
-FNULL = open(os.devnull, 'w')
 
 
 def assemble(sam, reference, outfile=sys.stdout, key=None, processes=1, align_prefix=None, output_empty=False):
@@ -91,7 +90,7 @@ def get_consensus(ref, seqdata, align_prefix):
     FastaIO.write((SeqRecord(id, seq) for id, seq in seqs), f)
     f.flush()
 
-    aln = str(subprocess.check_output([MAFFT, f.name], stderr=FNULL), 'utf-8')
+    aln = str(subprocess.check_output([MAFFT, f.name], stderr=subprocess.DEVNULL), 'utf-8')
     cons = consensus(FastaIO.parse(StringIO(aln)))
 
     if align_prefix:

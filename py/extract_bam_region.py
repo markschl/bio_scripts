@@ -1,9 +1,8 @@
-#!/usr/bin/env python2
-
-from __future__ import print_function
+#!/usr/bin/env python3
 
 import csv
 import pysam
+import sys
 
 from lib.seq import reverse_complement
 
@@ -22,10 +21,11 @@ def get_range(read, start, end):
 
 
 # CIGAR codes understood by the program
-M=0
-I=1
-D=2
-N=3
+M = 0
+I = 1
+D = 2
+N = 3
+
 
 def get_offset(cigar, pos):
     ref_pos = 0
@@ -35,7 +35,7 @@ def get_offset(cigar, pos):
             ref_pos += n
             offset -= n
         elif op == M or op == N:
-            ref_pos  += n
+            ref_pos += n
         elif op == I:
             offset += n
         else:
@@ -45,7 +45,7 @@ def get_offset(cigar, pos):
     return offset
 
 
-def run(bam, bed, output, margin=0, log=None, refout=False, minlen=1):
+def run(bam, bed, output, margin=0, log=None, refout=False, minlen=1, write_coords=False):
     if log is not None:
         log = csv.writer(log, delimiter='\t')
 
@@ -68,18 +68,21 @@ def run(bam, bed, output, margin=0, log=None, refout=False, minlen=1):
                 print('Invalid strand specification: ', strand, file=sys.stderr)
                 exit()
 
-            writer = Writer(minlen, margin)
+            writer = Writer(minlen, margin, write_coords=write_coords)
             for i, read in enumerate(f.fetch(region=id)):
-                if i == 0 and refout:
-                    offset = read.reference_start
-                    writer.write_trim(
-                        read.reference_name,
-                        # TODO: what do the inserted bytes signify? Doesn't work with Python 3 due to coding issues
-                        read.get_reference_sequence().decode('ascii', 'ignore').encode('ascii').upper(),
-                        offset + start, offset + end,
-                        output,
-                        reverse
-                    )
+                if i == 0:
+                    if reverse and refout:
+                        # TODO: is this all correct?
+                        offset = read.reference_start
+                        writer.write_trim(
+                            read.reference_name,
+                            # TODO: what do the inserted bytes mean in Python2 pysam?
+                            # also, doesn't work with Python 3 due to coding issues
+                            read.get_reference_sequence().decode('ascii', 'ignore').encode('ascii').upper(),
+                            offset + start, offset + end,
+                            output,
+                            reverse
+                        )
 
                 s, e = get_range(read, start, end)
                 writer.write_trim(read.query_name, read.query_sequence, s, e, output, reverse)
@@ -89,11 +92,12 @@ def run(bam, bed, output, margin=0, log=None, refout=False, minlen=1):
 
 
 class Writer(object):
-    def __init__(self, minlen=1, margin=0):
+    def __init__(self, minlen=1, margin=0, write_coords=False):
         self.n = 0
         self.n_written = 0
         self.minlen = minlen
         self.margin = margin
+        self.write_coords = write_coords
 
     def write_trim(self, seqname, seq, start, end, out, reverse=False):
         self.n += 1
@@ -108,11 +112,14 @@ class Writer(object):
             self.n_written += 1
             if end > maxend:
                 e = '{}]'.format(e)
-            out.write('>{}:{}-{}\n{}\n'.format(seqname, s+1, e, seq))
+            if self.write_coords:
+                _id = '{}:{}-{}'.format(seqname, s + 1, e)
+            else:
+                _id = seqname
+            out.write('>{}\n{}\n'.format(_id, seq))
 
 
 if __name__ == '__main__':
-
     import argparse
 
     p = argparse.ArgumentParser('''
@@ -123,13 +130,13 @@ if __name__ == '__main__':
     p.add_argument('bam', help='')
     p.add_argument('bed', type=argparse.FileType(), help='')
     p.add_argument('-o', '--output', type=argparse.FileType('w'), default='-')
+    p.add_argument('-c', '--write-coords', action='store_true')
     p.add_argument('--log', type=argparse.FileType('w'), default=sys.stderr)
     p.add_argument('-r', '--refout', action='store_true',
-        help="Output the trimmed reference sequence. CAUTION: Seems not to work \
-        correctly at present. Requires the MD tag to be set."
-    )
+                   help="Output the trimmed reference sequence. CAUTION: Seems not to work \
+                         correctly at present. Requires the MD tag to be set.")
     p.add_argument('-m', '--margin', type=int, default=0,
-        help='Remove n bases from the start and end of aligned reads if they \
+                   help='Remove n bases from the start and end of aligned reads if they \
         happen to be within the BED range')
     args = p.parse_args()
 

@@ -13,12 +13,14 @@ the domains.
 p.add_argument("prefix")
 p.add_argument("-d", "--domains", default='SSU,ITS1,5.8S,ITS2,LSU')
 p.add_argument("--minlen", type=int, default=4, help='minimum length of sequence')
-p.add_argument("-e", "--exclude", action='append', help='Exclude if given string is found in comment of positions file.')
+p.add_argument("-e", "--exclude", action='append', default=[], help='Exclude if given string is found in comment of positions file.')
+p.add_argument("-r", "--required-domains", help='Comma delimited list of domains that are required to be found. Otherwise, the sequence will be excluded.')
 args = p.parse_args()
 
 domain_p = re.compile(r'([^:]+): (.+)')
 len_p = re.compile(r'(\d+) bp\.')
 exclude = set(args.exclude)
+required_domains = set(d.strip() for d in args.required_domains.split(',')) if args.required_domains is not None else None
 
 minlen = args.minlen
 prefix = args.prefix
@@ -44,17 +46,27 @@ else:
     complementary = None
     print('No details file found. Re-run with --detailed_results if there are hits on the reverse strand')
 
+
+def parse_domain(d):
+    m = domain_p.search(d)
+    return m.group(1), m.group(2)
+
+
 with open(posfile) as f:
     for line in csv.reader(f, delimiter='\t'):
+        n += 1
         comment = line[7]
         if line and not any(e in comment for e in errors) and not any(e in comment for e in exclude):
             length = int(len_p.search(line[1]).group(1))
             id = line[0]
             pos = 1
+            data = [parse_domain(d) for d in line[2:7]]
+
+            if required_domains is not None and any(d in required_domains and text == 'Not found' for d, text in data):
+                continue
+
             for i in range(5):
-                m = domain_p.search(line[i + 2])
-                name = m.group(1)
-                text = m.group(2)
+                name, text = data[i]
                 if text != 'Not found' and name in outfiles:
                     if text in ('No start', 'No end'):
                         assert name == '5.8S' # always true?
@@ -78,15 +90,21 @@ with open(posfile) as f:
                     else:
                         start, end = map(int, text.split('-', 1))
 
-                    n += 1
                     pos = start
 
                     if end - start >= minlen:
+                        start -= 1  # convert to 0-based start
                         if complementary is None:
-                            outfiles[name].writerow([id, start - 1, end])
+                            outfiles[name].writerow([id, start, end])
                         else:
-                            strand = '-' if complementary[id] else '+'
-                            outfiles[name].writerow([id, start - 1, end, '', '', strand])
+                            if complementary[id]:
+                                # reverse strand: coordinates in positions file are reversed as well.
+                                # However, the query sequences are not reversed, so we have to adjust.
+                                start, end = length - end, length - start
+                                strand = '-'
+                            else:
+                                strand = '+'
+                            outfiles[name].writerow([id, start, end, id, '0', strand])
                         written[i] += 1
 
 for domain, n_written in zip(domains, written):
