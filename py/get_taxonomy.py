@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
+
 import re
-import sys
+from sys import stderr
 import csv
 from collections import defaultdict
 import xml.etree.ElementTree as ET
 from urllib import request
+from time import sleep, time
 
 from lib.util import iter_chunks
 
 
-def get_taxonomy(source, output, db=None, accessions=None, file=None, file_delimiter='\t', missing_out=None, *args, **kwargs):
+def get_taxonomy(source, output, db=None, accessions=None, file=None, file_delimiter='\t', missing_out=None, *args,
+                 **kwargs):
     if accessions is not None:
         accessions = accessions.split(',')
     elif file is not None:
-        accessions = (row[0] for row in csv.reader(file, delimiter=file_delimiter))
+        accessions = [row[0] for row in csv.reader(file, delimiter=file_delimiter)]
     else:
         raise Exception('Either supply comma delimited accession list or file with accessions')
 
@@ -93,12 +96,10 @@ class TaxWriter(object):
 TOOL = 'get_taxonomy.py'
 INTERVAL = 0.35
 
-from time import sleep, time
-
 last_call = {'time': 0}
 
 
-def eutils(command, email, max_tries=20, **param):
+def eutils(command, email, max_tries=100, **param):
     # ensure that there are no more than 3 requests per second
     t = time()
     t_diff = t - last_call['time']
@@ -109,16 +110,18 @@ def eutils(command, email, max_tries=20, **param):
     url = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils/{}.fcgi?email={}&tool={}'.format(command, email, TOOL)
     for k, v in param.items():
         url += '&{}={}'.format(k, v)
-    #print(url, file=sys.stderr)
+    # print(url, file=stderr)
     for i in range(max_tries):
         try:
             response = request.urlopen(url)
         except Exception as e:
             retry_in = 5 * (i + 1)
-            print(f"{e}: retrying after {retry_in} seconds\n", file=sys.stderr, flush=True)
+            print(f"{e}: retrying after {retry_in} seconds\n", file=stderr, flush=True)
             sleep(retry_in)
             if i == max_tries - 1:
                 raise Exception(f"Too many attempts ({max_tries})")
+            continue
+        break
     xml = response.read()
     return ET.fromstring(xml)
 
@@ -126,16 +129,22 @@ def eutils(command, email, max_tries=20, **param):
 err_re = re.compile(r'Invalid uid ([^ ]+) at')
 
 
-def from_web(accessions, writer, email=None, batch_size=100, **kw):
+def from_web(accessions, writer, email=None, id_batch_size=200, tax_batch_size=100, verbose=False, **kw):
     if email is None:
-        print('Email (-e) option is required with web source', file=sys.stderr)
+        print('Email (-e) option is required with web source', file=stderr)
         return
 
+    # First, obtain taxonomy IDs
     no_taxid = []
     taxid2acc = defaultdict(list)
-    for acc_chunk in iter_chunks(accessions, batch_size):
+    n = 0
+    for acc_chunk in iter_chunks(accessions, id_batch_size):
         acc_chunk = set(acc_chunk)
-        result = eutils('esummary', email, db='nucleotide', id=','.join(acc_chunk), retmax=batch_size)
+        if verbose:
+            n += len(acc_chunk)
+            print('Obtaining taxonomy IDs ({} of {} = {:.1f} %)'.format(n, len(accessions), n / len(accessions) * 100),
+                  file=stderr, end='\r')
+        result = eutils('esummary', email, db='nucleotide', id=','.join(acc_chunk), retmax=id_batch_size)
         for elem in result:
             if elem.tag == 'ERROR':
                 acc = version = err_re.search(elem.text).group(1)
@@ -154,13 +163,20 @@ def from_web(accessions, writer, email=None, batch_size=100, **kw):
                     acc_chunk.remove(version)
                 except KeyError:
                     print(f'An unknown accession was returned from NCBI: {acc} (versioned: {version}).',
-                          file=sys.stderr)
+                          file=stderr)
 
-        if len(acc_chunk) == 0:
-            print('Not all accessions returned, remaining: {}.'.format(','.join(acc_chunk), file=sys.stderr))
+        if len(acc_chunk) > 0:
+            print('Not all accessions returned in taxonomy ID search, remaining: {}.'.format(','.join(acc_chunk), file=stderr))
 
-    for taxids in iter_chunks(taxid2acc.keys(), batch_size):
+    # Obtain taxonomy from IDs
+    n = 0
+    print(taxid2acc)
+    for taxids in iter_chunks(taxid2acc.keys(), tax_batch_size):
         taxids = set(taxids)
+        if verbose:
+            n += len(taxids)
+            print('Obtaining lineages from IDs ({} of {} = {:.1f} %)'.format(n, len(accessions), n / len(accessions) * 100),
+                  file=stderr, end='\r')
         result = eutils('efetch', email, db='taxonomy', id=','.join(taxids), retmax=batch_size)
         for elem in result.findall('Taxon'):
             taxid = elem.find('TaxId').text
@@ -172,8 +188,9 @@ def from_web(accessions, writer, email=None, batch_size=100, **kw):
             for a in taxid2acc[taxid]:
                 writer.write_lineage(a, lineage)
             taxids.remove(taxid)
-        if len(taxids) == 0:
-            print('Not all taxonomy IDs returned, remaining: {}.'.format(','.join(taxids), file=sys.stderr))
+        if len(taxids) > 0:
+            print('Not all taxonomy IDs returned in lineage search, remaining: {}.'.format(','.join(taxids), file=stderr))
+
     return no_taxid
 
 
@@ -198,6 +215,7 @@ if __name__ == '__main__':
     p.add_argument("-d", "--db", help="Path to SQLITE database (taxdb source)")
     p.add_argument("-e", "--email", help="Required with web source")
     p.add_argument("-m", "--missing-out", type=argparse.FileType('w'))
+    p.add_argument("-v", "--verbose", action='store_true')
 
     args = p.parse_args()
 
