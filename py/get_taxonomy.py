@@ -43,10 +43,9 @@ def get_taxonomy(source, output, db=None, accessions=None, file=None, file_delim
         else:
             raise Exception('Unknown source: {}'.format(source))
 
-    if verbose:
-        print('No taxonomy found for {} accessions'.format(len(accessions)))
-
     if accessions:
+        if verbose:
+            print('No taxonomy found for {} accessions'.format(len(accessions)))
         if missing_out:
             missing_out.writelines(a + '\n' for a in accessions)
         else:
@@ -186,7 +185,6 @@ def from_entrez(accessions, writer, email, id_batch_size=200, tax_batch_size=100
         if len(acc_chunk) > 0:
             print('Not all accessions returned in taxonomy ID search, remaining: {}.'.format(','.join(acc_chunk),
                                                                                              file=stderr))
-
     # Obtain taxonomy from IDs
     n = 0
     for taxids in iter_chunks(taxid2acc.keys(), tax_batch_size):
@@ -206,7 +204,17 @@ def from_entrez(accessions, writer, email, id_batch_size=200, tax_batch_size=100
             lineage.append((elem.find('Rank').text, elem.find('ScientificName').text))
             for a in taxid2acc[taxid]:
                 writer.write_lineage(a, lineage)
-            taxids.remove(taxid)
+            try:
+                taxids.remove(taxid)
+            except KeyError:
+                aka_ids = {e.text for e in elem.find('AkaTaxIds')}
+                aka_ids = aka_ids.intersection(taxids)
+                assert len(aka_ids) > 0
+                if len(aka_ids) > 1:
+                    print('Warning: Taxon ID {} has more than one match in the list of requested IDs: {}'.format(taxid, ','.join(aka_ids)),
+                          file=stderr)
+                taxid = aka_ids.pop()
+                taxids.remove(taxid)
         if len(taxids) > 0:
             print(
                 'Not all taxonomy IDs returned in lineage search, remaining: {}.'.format(','.join(taxids), file=stderr))
@@ -227,6 +235,7 @@ def from_ftp(accessions, writer, accession_type='nucl_gb', verbose=False, **kw):
     bytes_stream = gzip.open(urlopen(f'{ftp_url}/accession2taxid/{accession_type}.accession2taxid.gz'))
     text_stream = codecs.iterdecode(bytes_stream, 'utf-8')
     n = 0
+    n_total = len(accessions)
     for accession, version, taxid, _ in csv.reader(text_stream, delimiter='\t'):
         if verbose and n % 100 == 0:
             print('Obtaining taxonomy IDs ({} of {} = {:.1f} %)'.format(n, len(accessions), n / len(accessions) * 100),
@@ -239,7 +248,7 @@ def from_ftp(accessions, writer, accession_type='nucl_gb', verbose=False, **kw):
             accessions[version] = True
             taxid2acc[taxid].append(version)
             n += 1
-        if n == len(accessions):
+        if n == n_total:
             break
 
     # retrieve taxonomy
