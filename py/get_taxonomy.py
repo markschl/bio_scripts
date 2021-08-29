@@ -16,8 +16,8 @@ from remotezip import RemoteZip
 from lib.util import iter_chunks
 
 
-def get_taxonomy(source, output, db=None, accessions=None, file=None, file_delimiter='\t', missing_out=None, *args,
-                 **kwargs):
+def get_taxonomy(source, output, db=None, accessions=None, file=None, file_delimiter='\t', missing_out=None,
+                 email=None, verbose=False, **kw):
     if accessions is not None:
         accessions = accessions.split(',')
     elif file is not None:
@@ -27,24 +27,34 @@ def get_taxonomy(source, output, db=None, accessions=None, file=None, file_delim
 
     writer = TaxWriter(output)
 
-    if source == 'taxadb':
-        missing = from_taxdb(db, accessions, writer, **kwargs)
-    elif source == 'entrez':
-        missing = from_entrez(accessions, writer, *args, **kwargs)
-    elif source == 'ftp':
-        missing = from_ftp(accessions, writer, *args, **kwargs)
-    else:
-        raise Exception('Unknown source: {}'.format(source))
+    sources = source.split(',')
 
-    if missing:
-        if missing_out:
-            missing_out.writelines(a + '\n' for a in missing)
+    if 'entrez' in sources and email is None:
+        print('Email (-e) option is required with entrez source', file=stderr)
+        return
+
+    for source in sources:
+        if source == 'taxadb':
+            accessions = from_taxdb(db, accessions, writer, **kw)
+        elif source == 'entrez':
+            accessions = from_entrez(accessions, writer, email, verbose=verbose, **kw)
+        elif source == 'ftp':
+            accessions = from_ftp(accessions, writer, verbose=verbose, **kw)
         else:
-            print('No taxonomy found for {} accessions. Use -m to obtain a list of them.'.format(len(missing)))
+            raise Exception('Unknown source: {}'.format(source))
+
+    if verbose:
+        print('No taxonomy found for {} accessions'.format(len(accessions)))
+
+    if accessions:
+        if missing_out:
+            missing_out.writelines(a + '\n' for a in accessions)
+        else:
+            print('No taxonomy found for {} accessions. Use -m to obtain a list of them.'.format(len(accessions)))
 
 
 def from_taxdb(db, accessions, writer, **kw):
-    print("Fetching {} accessions from TaxaDB".format(len(accessions)), file=stderr)
+    print("Fetching taxonomy for {} accessions from TaxaDB".format(len(accessions)), file=stderr)
 
     from taxadb.accessionid import AccessionID
 
@@ -91,7 +101,7 @@ def lineage_names_levels(accdb, acc_number_list):
                 new_query = Taxa.get(Taxa.ncbi_taxid == parent)
                 current_lineage = (new_query.lineage_level, new_query.tax_name)
                 parent = new_query.parent_taxid
-            yield (i.accession, lineage_list)
+            yield i.accession, lineage_list
 
 
 class TaxWriter(object):
@@ -138,13 +148,9 @@ def eutils(command, email, max_tries=100, **param):
 err_re = re.compile(r'Invalid uid ([^ ]+) at')
 
 
-def from_entrez(accessions, writer, email=None, id_batch_size=200, tax_batch_size=100, verbose=False, **kw):
-    if email is None:
-        print('Email (-e) option is required with web source', file=stderr)
-        return
-
+def from_entrez(accessions, writer, email, id_batch_size=200, tax_batch_size=100, verbose=False, **kw):
     if verbose:
-        print("Fetching {} accessions from NCBI Entrez web service".format(len(accessions)), file=stderr)
+        print("Fetching taxonomy for {} accessions from NCBI Entrez web service".format(len(accessions)), file=stderr)
 
     # First, obtain taxonomy IDs
     no_taxid = []
@@ -178,16 +184,17 @@ def from_entrez(accessions, writer, email=None, id_batch_size=200, tax_batch_siz
                           file=stderr)
 
         if len(acc_chunk) > 0:
-            print('Not all accessions returned in taxonomy ID search, remaining: {}.'.format(','.join(acc_chunk), file=stderr))
+            print('Not all accessions returned in taxonomy ID search, remaining: {}.'.format(','.join(acc_chunk),
+                                                                                             file=stderr))
 
     # Obtain taxonomy from IDs
     n = 0
-    print(taxid2acc)
     for taxids in iter_chunks(taxid2acc.keys(), tax_batch_size):
         taxids = set(taxids)
         if verbose:
             n += len(taxids)
-            print('Obtaining lineages from IDs ({} of {} = {:.1f} %)'.format(n, len(accessions), n / len(accessions) * 100),
+            print('Obtaining lineages from taxon IDs ({} of {} = {:.1f} %)'.format(n, len(accessions),
+                                                                             n / len(accessions) * 100),
                   file=stderr, end='\r')
         result = eutils('efetch', email, db='taxonomy', id=','.join(taxids), retmax=tax_batch_size)
         for elem in result.findall('Taxon'):
@@ -201,14 +208,19 @@ def from_entrez(accessions, writer, email=None, id_batch_size=200, tax_batch_siz
                 writer.write_lineage(a, lineage)
             taxids.remove(taxid)
         if len(taxids) > 0:
-            print('Not all taxonomy IDs returned in lineage search, remaining: {}.'.format(','.join(taxids), file=stderr))
+            print(
+                'Not all taxonomy IDs returned in lineage search, remaining: {}.'.format(','.join(taxids), file=stderr))
+
+    if verbose:
+        print('')
 
     return no_taxid
 
 
 def from_ftp(accessions, writer, accession_type='nucl_gb', verbose=False, **kw):
     if verbose:
-        print("Fetching {} accessions from taxonomy dump on NCBI FTP server".format(len(accessions)), file=stderr)
+        print("Fetching taxonomy for {} accessions from taxonomy dump on NCBI FTP server".format(len(accessions)),
+              file=stderr)
     taxid2acc = defaultdict(list)
     accessions = {a: False for a in accessions}
     ftp_url = 'https://ftp.ncbi.nlm.nih.gov/pub/taxonomy'
@@ -216,6 +228,9 @@ def from_ftp(accessions, writer, accession_type='nucl_gb', verbose=False, **kw):
     text_stream = codecs.iterdecode(bytes_stream, 'utf-8')
     n = 0
     for accession, version, taxid, _ in csv.reader(text_stream, delimiter='\t'):
+        if verbose and n % 100 == 0:
+            print('Obtaining taxonomy IDs ({} of {} = {:.1f} %)'.format(n, len(accessions), n / len(accessions) * 100),
+                  file=stderr, end='\r')
         if accession in accessions:
             accessions[accession] = True
             taxid2acc[taxid].append(accession)
@@ -224,33 +239,43 @@ def from_ftp(accessions, writer, accession_type='nucl_gb', verbose=False, **kw):
             accessions[version] = True
             taxid2acc[taxid].append(version)
             n += 1
-        if verbose and n % 100 == 0:
-            print('Obtaining taxonomy IDs ({} of {} = {:.1f} %)'.format(n, len(accessions), n / len(accessions) * 100),
-                  file=stderr, end='\r')
+        if n == len(accessions):
+            break
 
     # retrieve taxonomy
     # the ranks are not well documented
     ranks = ['no_rank', 'superkingdom', 'clade', 'kingdom', 'no_rank', 'phylum', 'subphylum',
              'class', 'subclass', 'order', 'suborder',
              'family', 'subfamily', 'genus', '?', '?', '?', 'species', 'varietas?']
-    taxids = set(taxid2acc.keys())
     taxdump = RemoteZip(ftp_url + '/new_taxdump/new_taxdump.zip')
     byte_stream = taxdump.open('rankedlineage.dmp')
     text_stream = codecs.iterdecode(byte_stream, 'utf-8')
     n = 0
+    n_total = len(taxid2acc)
     for l in csv.reader(text_stream, delimiter='\t'):
         taxid = l[0]
-        if taxid in taxids:
-            n += 1
+        try:
+            acc = taxid2acc.pop(taxid)
             if verbose and n % 100 == 0:
-                print('Obtaining lineages ({} of {} = {:.1f} %)'.format(n, len(taxids),
-                                                                            n / len(taxids) * 100),
+                print('Obtaining lineages from taxon IDs ({} of {} = {:.1f} %)'.format(n, n_total, n / n_total * 100),
                       file=stderr, end='\r')
+            n += 1
             lineage = [(rank, name) for rank, name in zip(ranks, reversed(l)) if name != '' and name != '|']
-            for acc in taxid2acc[taxid]:
-                writer.write_lineage(acc, lineage)
+            for a in acc:
+                writer.write_lineage(a, lineage)
+            # check if finished
+            if not taxid2acc:
+                break
+        except KeyError:
+            pass
 
-    return [acc for acc, found in accessions.items() if not found]
+    if verbose:
+        print('')
+
+    if len(taxid2acc) > 0:
+        print('No lineage found for {} taxon IDs'.format(len(taxid2acc)), file=stderr)
+
+    return [acc for acc, found in accessions.items() if not found] + [a for acc in taxid2acc.values() for a in acc]
 
 
 if __name__ == '__main__':
@@ -258,19 +283,33 @@ if __name__ == '__main__':
 
     p = argparse.ArgumentParser('''
     Script for retrieving taxonomic lineages for a set of Genbank accessions.
-    Data is either retrieved from a Taxadb (https://github.com/HadrienG/taxadb)
-    file in Sqlite format or using NCBI's Entrez webservice (for smaller sets).
-    Using the Entrez webservice requires supplying a contact email address.
+    Data is either retrieved from the NCBI Entrez webservice (for smaller sets), from the NCBI taxonomy dump files
+    (for large sets), or Taxadb (https://github.com/HadrienG/taxadb) file in Sqlite format (for repeated queries of
+    large sets). Using the Entrez webservice requires supplying a contact email address.
     ''')
     p.add_argument("-a", "--accessions", help="Comma delimited list of Genbank accessions")
     p.add_argument("-f", "--file",
-                   help="File with Genbank accession on each line / in the first column if tab-delimited.",
-                   type=argparse.FileType('r'), default='-')
-    p.add_argument("--file-delimiter",
-                   help='Delimiter for input file containing accessions ("--file"). Default: tab',
-                   default='\t')
-    p.add_argument("-o", "--output", type=argparse.FileType('w'), default='-')
-    p.add_argument("-s", "--source", choices={'ftp', 'entrez', 'taxadb'}, default='ftp')
+                   type=argparse.FileType('r'), default='-',
+                   help="File with Genbank accession on each line / in the first column if tab-delimited")
+    p.add_argument("--file-delimiter", default='\t',
+                   help='Delimiter for input file containing accessions ("--file"). Default: tab')
+    p.add_argument("-o", "--output", type=argparse.FileType('w'), default='-',
+                   help='Output file (default: standard output)')
+    p.add_argument("-s", "--source", default='entrez',
+                   help='Comma delimited list of sources that should be used. The taxonomy will be fetched from them'
+                        'in the given order, whereby only IDs for which no taxonomy was found will be passed on to the'
+                        'next source. Possible choices: ftp, entrez and taxadb. The ftp source parses the taxonomy'
+                        'dumps on the NCBI FTP server and looks for the taxon IDs and lineages on the fly while'
+                        'downloading. These files are large and therefore require a good internet connection, but it is'
+                        'likely the fastest method. On the downside, the dumps may not always be up to date. Therefore,'
+                        'it is recommended to specify -s ftp,entrez to download IDs not in the dumps from Entrez.'
+                        'The entrez source fetches from the NCBI Entrez web service. This is slower, but downloads only'
+                        'data if really necessary, and will always find the most recent entries. Don\'t forget to'
+                        'specify the email address with -e'
+                        'The taxadb source fetches from a https://github.com/HadrienG/taxadb database, whose location'
+                        'is specified with -d. Constructing such a database only makes sense if it is required to'
+                        '*repeatedly* fetch the taxonomy for huge numbers of accessions. TaxaDB instances are usually'
+                        'very large (> 10 GiB)')
     p.add_argument("-t", "--accession-type",
                    choices={'nucl_gb', 'nucl_wgs', 'pdb', 'prot', 'dead_nucl', 'dead_prot', 'dead_wgs'},
                    default='nucl_gb')
