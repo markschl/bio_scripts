@@ -16,6 +16,8 @@ def extract(taxonomy, output, ranks='', illegal=' ', unknown=None):
 
     ranks = list(reversed(ranks))
     for row in csv.reader(taxonomy, delimiter='\t'):
+        if not row:
+            continue
         id = row[0]
         lineage = [n.split(':', 1) for n in reversed(row[1:])]
         lineage_dict = {r[0]: (r[1], i) for i, r in enumerate(lineage)}
