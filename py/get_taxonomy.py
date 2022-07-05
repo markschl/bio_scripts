@@ -16,12 +16,20 @@ from remotezip import RemoteZip
 from lib.util import iter_chunks
 
 
-def get_taxonomy(source, output, db=None, accessions=None, file=None, file_delimiter='\t', missing_out=None,
+def get_taxonomy(source, output, db=None, accessions=None, file=None, file_delimiter='\t', file_column='1', missing_out=None,
                  email=None, verbose=False, **kw):
     if accessions is not None:
         accessions = accessions.split(',')
     elif file is not None:
-        accessions = [row[0] for row in csv.reader(file, delimiter=file_delimiter)]
+        rdr = csv.reader(file, delimiter=file_delimiter)
+        try:
+            i = int(file_column)
+            assert i > 0, 'Column numbers must be greater than 0'
+            i -= 1
+        except ValueError:
+            header = next(rdr)
+            i = header.index(file_column)
+        accessions = (row[i] for row in rdr)
     else:
         raise Exception('Either supply comma delimited accession list or file with accessions')
 
@@ -45,11 +53,11 @@ def get_taxonomy(source, output, db=None, accessions=None, file=None, file_delim
 
     if accessions:
         if verbose:
-            print('No taxonomy found for {} accessions'.format(len(accessions)))
+            print('No taxonomy found for {} accessions'.format(len(accessions)), file=stderr)
         if missing_out:
             missing_out.writelines(a + '\n' for a in accessions)
         else:
-            print('No taxonomy found for {} accessions. Use -m to obtain a list of them.'.format(len(accessions)))
+            print('No taxonomy found for {} accessions. Use -m to obtain a list of them.'.format(len(accessions)), file=stderr)
 
 
 def from_taxdb(db, accessions, writer, **kw):
@@ -164,22 +172,22 @@ def from_entrez(accessions, writer, email, id_batch_size=200, tax_batch_size=100
         result = eutils('esummary', email, db='nucleotide', id=','.join(acc_chunk), retmax=id_batch_size)
         for elem in result:
             if elem.tag == 'ERROR':
-                acc = version = err_re.search(elem.text).group(1)
+                acc = accversion = err_re.search(elem.text).group(1)
                 assert acc is not None
                 no_taxid.append(acc)
             else:
                 acc = elem.find("Item[@Name='Caption']").text
-                version = elem.find("Item[@Name='AccessionVersion']").text
+                accversion = elem.find("Item[@Name='AccessionVersion']").text
                 taxid = elem.find("Item[@Name='TaxId']").text
                 # print('taxid', acc, elem.tag, elem.text, [(c.tag, c.text, c.get('Name')) for c in elem])
-                taxid2acc[taxid].append(acc)
+                taxid2acc[taxid].append(accversion)
             try:
-                acc_chunk.remove(acc)
+                acc_chunk.remove(accversion)
             except KeyError:
                 try:
-                    acc_chunk.remove(version)
+                    acc_chunk.remove(acc)
                 except KeyError:
-                    print(f'An unknown accession was returned from NCBI: {acc} (versioned: {version}).',
+                    print(f'An unknown accession was returned from NCBI: {acc} (versioned: {accversion}).',
                           file=stderr)
 
         if len(acc_chunk) > 0:
@@ -187,6 +195,7 @@ def from_entrez(accessions, writer, email, id_batch_size=200, tax_batch_size=100
                                                                                              file=stderr))
     # Obtain taxonomy from IDs
     n = 0
+    #print(taxid2acc)
     for taxids in iter_chunks(taxid2acc.keys(), tax_batch_size):
         taxids = set(taxids)
         if verbose:
@@ -220,7 +229,7 @@ def from_entrez(accessions, writer, email, id_batch_size=200, tax_batch_size=100
                 'Not all taxonomy IDs returned in lineage search, remaining: {}.'.format(','.join(taxids), file=stderr))
 
     if verbose:
-        print('')
+        print('', file=stderr)
 
     return no_taxid
 
@@ -236,17 +245,17 @@ def from_ftp(accessions, writer, accession_type='nucl_gb', verbose=False, **kw):
     text_stream = codecs.iterdecode(bytes_stream, 'utf-8')
     n = 0
     n_total = len(accessions)
-    for accession, version, taxid, _ in csv.reader(text_stream, delimiter='\t'):
+    for accession, accversion, taxid, _ in csv.reader(text_stream, delimiter='\t'):
         if verbose and n % 100 == 0:
             print('Obtaining taxonomy IDs ({} of {} = {:.1f} %)'.format(n, len(accessions), n / len(accessions) * 100),
                   file=stderr, end='\r')
+        if accversion in accessions:
+            accessions[accversion] = True
+            taxid2acc[taxid].append(accversion)
+            n += 1
         if accession in accessions:
             accessions[accession] = True
             taxid2acc[taxid].append(accession)
-            n += 1
-        if version in accessions:
-            accessions[version] = True
-            taxid2acc[taxid].append(version)
             n += 1
         if n == n_total:
             break
@@ -279,7 +288,7 @@ def from_ftp(accessions, writer, accession_type='nucl_gb', verbose=False, **kw):
             pass
 
     if verbose:
-        print('')
+        print('', file=stderr)
 
     if len(taxid2acc) > 0:
         print('No lineage found for {} taxon IDs'.format(len(taxid2acc)), file=stderr)
@@ -300,6 +309,10 @@ if __name__ == '__main__':
     p.add_argument("-f", "--file",
                    type=argparse.FileType('r'), default='-',
                    help="File with Genbank accession on each line / in the first column if tab-delimited")
+    p.add_argument("-c", "--file-column", default='1',
+                    help="Column in accessions file (--file) that contains the accessions. Default is the first"
+                    'column (1), assuming there is no header. Another number can be specified, or a non-numeric'
+                    'string specifying the column name, in which case a header has to be present.')
     p.add_argument("--file-delimiter", default='\t',
                    help='Delimiter for input file containing accessions ("--file"). Default: tab')
     p.add_argument("-o", "--output", type=argparse.FileType('w'), default='-',
