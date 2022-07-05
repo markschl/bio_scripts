@@ -8,7 +8,7 @@ import re
 def extract(taxonomy, output, ranks='', illegal=' ', unknown=None):
     ranks = ranks.split(',')
     writer = csv.writer(output, delimiter='\t')
-    writer.writerow(['id'] + ranks)
+    writer.writerow(['accession'] + ranks)
     illegal_patt = re.compile(r'[{}]'.format(re.escape(illegal)))
     if unknown is not None:
         unknown = re.compile(r'({})'.format('|'.join(re.escape(u) for u in unknown.split(','))), re.I)
