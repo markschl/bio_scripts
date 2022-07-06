@@ -137,12 +137,18 @@ Names containing one of the '--unknown' keywords will be replaced by the next de
 upwards in the hierarchy, and '_unknown' is appended.
 Make sure to always specify the ranks in the correct order, otherwise there will be confusion.
 """)
-p.add_argument("taxonomy", type=argparse.FileType('r'), help="File with Genbank accession on each line")
-p.add_argument("-r", "--ranks", help="comma delimited list of ranks to extract",
-               default="superkingdom,kingdom,phylum,class,order,family,genus,species,varietas")
-p.add_argument("-o", "--output", type=argparse.FileType('w'), default='-')
-p.add_argument("-u", "--unknown", default='environmental,uncultured,incertae,unidentified,unknown,unclassified')
-p.add_argument("--illegal", default=' ', help='Illegal characters to replace by _')
+p.add_argument("-t", "--taxonomy", type=argparse.FileType('r'), default='-',
+    help="File with Genbank accession on each line. Default: Standard input (-)")
+p.add_argument("-r", "--ranks", help="""
+    Comma delimited list of ranks to extract. Default:
+    'superkingdom,kingdom,phylum,class,order,family,genus,species,varietas'
+    """, default="superkingdom,kingdom,phylum,class,order,family,genus,species,varietas")
+p.add_argument("-o", "--output", type=argparse.FileType('w'), default='-', help='Output. Default: Standard output (-)')
+p.add_argument("-u", "--unknown", default='environmental,uncultured,incertae,unidentified,unknown,unclassified',
+               help='Comma delimited list of keywords that specify unknown names. '
+                    'Default: environmental,uncultured,incertae,unidentified,unknown,unclassified. '
+                    'These names will be replaced with "<upper name>_unknown"')
+p.add_argument("--illegal", default=' ', help='Illegal characters to replace by "_". Default: spaces')
 args = p.parse_args()
 
 extract(**vars(args))
