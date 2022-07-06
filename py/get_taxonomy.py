@@ -16,20 +16,24 @@ from remotezip import RemoteZip
 from lib.util import iter_chunks
 
 
-def get_taxonomy(source, output, db=None, accessions=None, file=None, file_delimiter='\t', file_column='1', missing_out=None,
+def get_taxonomy(source, output, db=None, accessions=None, input=None, fasta=None,
+                 input_delimiter='\t', input_column='1', missing_out=None,
                  email=None, verbose=False, **kw):
     if accessions is not None:
         accessions = accessions.split(',')
-    elif file is not None:
-        rdr = csv.reader(file, delimiter=file_delimiter)
+    elif input is not None:
+        rdr = csv.reader(input, delimiter=input_delimiter)
         try:
-            i = int(file_column)
+            i = int(input_column)
             assert i > 0, 'Column numbers must be greater than 0'
             i -= 1
         except ValueError:
             header = next(rdr)
-            i = header.index(file_column)
-        accessions = (row[i] for row in rdr)
+            i = header.index(input_column)
+        accessions = [row[i] for row in rdr]
+    elif fasta is not None:
+        from lib.FastaIO import parse
+        accessions = [parse_gb_id(r.id) for r in parse(fasta)]
     else:
         raise Exception('Either supply comma delimited accession list or file with accessions')
 
@@ -58,6 +62,15 @@ def get_taxonomy(source, output, db=None, accessions=None, file=None, file_delim
             missing_out.writelines(a + '\n' for a in accessions)
         else:
             print('No taxonomy found for {} accessions. Use -m to obtain a list of them.'.format(len(accessions)), file=stderr)
+
+
+_old_gb_re = re.compile(r'gi\|[^\|]+\|gb\|([^\|]+).*')
+
+def parse_gb_id(id):
+    m = _old_gb_re.search(id)
+    if m is None:
+        return id.strip()
+    return m.group(1)
 
 
 def from_taxdb(db, accessions, writer, **kw):
@@ -306,21 +319,25 @@ if __name__ == '__main__':
     large sets). Using the Entrez webservice requires supplying a contact email address.
     ''')
     p.add_argument("-a", "--accessions", help="Comma delimited list of Genbank accessions")
-    p.add_argument("-f", "--file",
-                   type=argparse.FileType('r'), default='-',
+    p.add_argument("-i", "--input",
+                   type=argparse.FileType('r'),
                    help="File with Genbank accession on each line / in the first column if tab-delimited")
-    p.add_argument("-c", "--file-column", default='1',
+    p.add_argument("-f", "--fasta",
+                   type=argparse.FileType('r'),
+                   help="File with GenBank accessions as IDs, e.g. downloaded using gb_downloader.py")
+    p.add_argument("-c", "--input-column", default='1',
                     help="Column in accessions file (--file) that contains the accessions. Default is the first"
                     'column (1), assuming there is no header. Another number can be specified, or a non-numeric'
                     'string specifying the column name, in which case a header has to be present.')
-    p.add_argument("--file-delimiter", default='\t',
+    p.add_argument("--input-delimiter", default='\t',
                    help='Delimiter for input file containing accessions ("--file"). Default: tab')
     p.add_argument("-o", "--output", type=argparse.FileType('w'), default='-',
                    help='Output file (default: standard output)')
     p.add_argument("-s", "--source", default='entrez',
-                   help='Comma delimited list of sources that should be used. The taxonomy will be fetched from them'
-                        'in the given order, whereby only IDs for which no taxonomy was found will be passed on to the'
-                        'next source. Possible choices: ftp, entrez and taxadb. The ftp source parses the taxonomy'
+                   help='Comma delimited list of sources that should be used. Possible choices: ftp, entrez and taxadb.'
+                        'The taxonomy will be fetched from them in the given order, whereby only IDs for which no '
+                        'taxonomy was found will be passed on to the next source. '
+                        'The ftp source parses the taxonomy'
                         'dumps on the NCBI FTP server and looks for the taxon IDs and lineages on the fly while'
                         'downloading. These files are large and therefore require a good internet connection, but it is'
                         'likely the fastest method. On the downside, the dumps may not always be up to date. Therefore,'
